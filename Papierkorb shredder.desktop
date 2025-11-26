@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Secure Trash Shredder
+Comment=Securely delete all files in the trash
+Icon=user-trash-full
+Exec=/home/joruf/Dokumente/GitHub/Shredder/shredder.py
+Terminal=false
+Categories=Utility;Security;System;
+StartupNotify=true
