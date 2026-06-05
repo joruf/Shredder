@@ -11,6 +11,7 @@ Features:
 - Shows Trash path and live first-level listing that updates during runs.
 - Status and progress bars stretch to full width without right padding.
 - Robust cleanup handles regular files, symlinks, and nested directories.
+- Progress percentage displayed inside the progress bar, plus real‑time ETA.
 """
 
 import os
@@ -21,6 +22,7 @@ import random
 import string
 import threading
 import subprocess
+import time
 from pathlib import Path
 from typing import Callable, List, Tuple, Optional, Any, Dict
 
@@ -35,7 +37,7 @@ DEFAULT_METHOD_KEY: str = "dod_3pass"
 
 # Startup window dimensions (the app stays fully resizable).
 DEFAULT_WINDOW_WIDTH: int = 540
-DEFAULT_WINDOW_HEIGHT: int = 420
+DEFAULT_WINDOW_HEIGHT: int = 460
 
 # Number of visible rows in the Trash listbox at startup.
 LISTBOX_VISIBLE_ROWS: int = 10
@@ -239,6 +241,7 @@ class Shredder:
         self.is_cancelled = is_cancelled
         self.total_bytes = 0
         self.processed_bytes = 0
+        self.start_time: Optional[float] = None
 
     def trash_root(self) -> Path:
         """Return the target Trash/files path."""
@@ -287,6 +290,33 @@ class Shredder:
                 continue
         return total
 
+    def _format_eta(self, seconds: float) -> str:
+        """Format seconds into HH:MM:SS or MM:SS."""
+        if seconds < 0:
+            seconds = 0
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        if h > 0:
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        else:
+            return f"{m:02d}:{s:02d}"
+
+    def _update_progress(self, ratio: float, base_status: str) -> None:
+        """
+        Calculate ETA and append it to the status string, then call on_progress.
+        """
+        eta_str = ""
+        if self.start_time is not None and self.processed_bytes > 0 and self.total_bytes > 0:
+            elapsed = time.time() - self.start_time
+            speed = self.processed_bytes / elapsed  # bytes per second
+            remaining_bytes = self.total_bytes - self.processed_bytes
+            if speed > 0:
+                eta_seconds = remaining_bytes / speed
+                eta_str = f" (ETA: {self._format_eta(eta_seconds)})"
+        full_status = base_status + eta_str
+        self.on_progress(ratio, full_status)
+
     def overwrite_file(self, path: Path, method: OverwriteMethod) -> None:
         """Overwrite a single file per method and unlink it, best-effort."""
         # Symlinks are not overwritten, just unlinked.
@@ -327,7 +357,8 @@ class Shredder:
                 for idx, token in enumerate(method.passes, start=1):
                     if self.is_cancelled():
                         raise Cancelled()
-                    self.on_progress(self.progress_ratio(), f"Overwriting {path.name} pass {idx}/{len(method.passes)}")
+                    base_status = f"Overwriting {path.name} pass {idx}/{len(method.passes)}"
+                    self._update_progress(self.progress_ratio(), base_status)
                     f.seek(0)
                     remaining = size
                     while remaining > 0:
@@ -343,7 +374,7 @@ class Shredder:
                         written = f.write(buf) or 0
                         remaining -= written
                         self.processed_bytes += written
-                        self.on_progress(self.progress_ratio(), f"Overwriting {path.name} pass {idx}/{len(method.passes)}")
+                        self._update_progress(self.progress_ratio(), base_status)
                     f.flush()
                     os.fsync(f.fileno())
                 f.truncate(size)
@@ -426,16 +457,17 @@ class Shredder:
 
     def shred_trash(self, method: OverwriteMethod) -> Tuple[int, int]:
         """Execute shredding of Trash; return (files_done, dirs_done)."""
+        self.start_time = time.time()
         root = self.trash_root()
         if not root.exists():
-            self.on_progress(1.0, "100% - Trash is already empty")
+            self._update_progress(1.0, "Trash is already empty")
             return (0, 0)
 
         if is_mounted_trash_dir(root):
-            self.on_progress(0.0, "0% - Notice: Trash resides on a different mount, guarantees may vary")
+            self._update_progress(0.0, "Notice: Trash resides on a different mount, guarantees may vary")
 
         # STEP 1: Collect all files (including in subdirectories)
-        self.on_progress(0.0, "0% - Scanning Trash contents...")
+        self._update_progress(0.0, "Scanning Trash contents...")
         all_files = self.enumerate_all_files()
         self.total_bytes = self.compute_total_bytes(all_files)
         self.processed_bytes = 0
@@ -447,11 +479,12 @@ class Shredder:
                 raise Cancelled()
             self.overwrite_file(f, method)
             files_done += 1
-            pct = int(self.progress_ratio() * 80)  # Files take 0-80%
-            self.on_progress(self.progress_ratio() * 0.8, f"{pct}% - Processed files {files_done}/{len(all_files)}")
+            pct = int(self.progress_ratio() * 80)
+            self._update_progress(self.progress_ratio() * 0.8,
+                                  f"Processed files {files_done}/{len(all_files)}")
 
         # STEP 3: Remove all directories (80-90% of progress)
-        self.on_progress(0.8, "80% - Collecting directories...")
+        self._update_progress(0.8, "Collecting directories...")
         all_dirs = self.enumerate_all_dirs()
         dirs_done = 0
         dir_progress_range = 0.1  # 10% for directories
@@ -461,12 +494,12 @@ class Shredder:
             dir_ratio = (idx / len(all_dirs)) * dir_progress_range if all_dirs else 0
             total_progress = 0.8 + dir_ratio
             pct = int(total_progress * 100)
-            self.on_progress(total_progress, f"{pct}% - Removing directory {d.name}")
+            self._update_progress(total_progress, f"Removing directory {d.name}")
             self.remove_empty_dir(d)
             dirs_done += 1
 
         # STEP 4: Clear metadata (90-95% of progress)
-        self.on_progress(0.9, "90% - Clearing trash metadata...")
+        self._update_progress(0.9, "Clearing trash metadata...")
         info_dir = root.parent / "info"
         if info_dir.exists():
             for p in info_dir.glob("*.trashinfo"):
@@ -479,10 +512,9 @@ class Shredder:
             fsync_dir(info_dir)
 
         # STEP 5: Final aggressive cleanup sweep (95-98% of progress)
-        self.on_progress(0.95, "95% - Final cleanup sweep...")
+        self._update_progress(0.95, "Final cleanup sweep...")
         try:
             if root.exists():
-                # Get ALL remaining items recursively
                 leftovers = []
                 for dirpath, dirnames, filenames in os.walk(root, topdown=False, followlinks=False):
                     dp = Path(dirpath)
@@ -491,14 +523,12 @@ class Shredder:
                     for d in dirnames:
                         leftovers.append(dp / d)
                 
-                # Remove everything found
                 for idx, p in enumerate(leftovers):
                     if self.is_cancelled():
                         raise Cancelled()
                     leftover_ratio = (idx / len(leftovers)) * 0.03 if leftovers else 0
                     total_progress = 0.95 + leftover_ratio
-                    pct = int(total_progress * 100)
-                    self.on_progress(total_progress, f"{pct}% - Removing leftover {p.name}")
+                    self._update_progress(total_progress, f"Removing leftover {p.name}")
                     try:
                         if p.is_file() or p.is_symlink():
                             ensure_writable(p)
@@ -511,7 +541,7 @@ class Shredder:
             pass
 
         # STEP 6: Try to remove the root trash directory itself (98-100% of progress)
-        self.on_progress(0.98, "98% - Finalizing...")
+        self._update_progress(0.98, "Finalizing...")
         fsync_dir(root)
         if root.exists():
             try:
@@ -520,7 +550,7 @@ class Shredder:
                 pass
         fsync_dir(root.parent)
 
-        self.on_progress(1.0, "100% - Trash shredded successfully")
+        self._update_progress(1.0, f"Done: {files_done} files, {dirs_done} dirs")
         return (files_done, dirs_done)
 
 
@@ -540,8 +570,7 @@ class App(tk.Tk):
 
         self.selected_label = tk.StringVar(value=default_label)
         self.status_var = tk.StringVar(value="Idle")
-        self.percent_var = tk.StringVar(value="0%")
-        self.progress_pct_var = tk.StringVar(value="0%")
+        self.progress_pct_var = tk.StringVar(value="0%")   # shown next to buttons
         self.cancel_flag = threading.Event()
         self.worker: Optional[threading.Thread] = None
         self._live_timer: Optional[str] = None  # after() id for live refresh
@@ -553,7 +582,7 @@ class App(tk.Tk):
         self._schedule_live_refresh()
 
     def _build_widgets(self, default_label: str) -> None:
-        """Create and layout all widgets."""
+        """Create and layout all widgets, with percentage label inside progress bar."""
         padding = {"padx": 10, "pady": 6}
 
         # Top row: method combobox
@@ -577,18 +606,25 @@ class App(tk.Tk):
         self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self.stop, state="disabled")
         self.stop_btn.pack(side="left", padx=(8, 0))
         
-        # Progress percentage display next to buttons
+        # Progress percentage display next to buttons (optional, but kept for clarity)
         self.progress_pct_var = tk.StringVar(value="0%")
         pct_display = ttk.Label(btn_frame, textvariable=self.progress_pct_var, font=("TkDefaultFont", 10, "bold"))
         pct_display.pack(side="left", padx=(16, 0))
 
-        # Progress row, no right padding
-        prog_frame = ttk.Frame(self)
-        prog_frame.pack(fill="x", padx=(10, 0), pady=4)
-        self.progress = ttk.Progressbar(prog_frame, orient="horizontal", mode="determinate")
-        self.progress.pack(fill="x", expand=True, side="left")
-        self.percent_label = ttk.Label(prog_frame, textvariable=self.percent_var, width=6)
-        self.percent_label.pack(side="left", padx=(8, 0))
+        # Progress bar container with centered percentage label
+        prog_container = ttk.Frame(self, height=24)
+        prog_container.pack(fill="x", padx=(10, 0), pady=4)
+        prog_container.pack_propagate(False)  # keep fixed height
+        self.progress = ttk.Progressbar(prog_container, orient="horizontal", mode="determinate")
+        self.progress.pack(fill="both", expand=True)
+        # Create a label that sits right on top of the progress bar
+        # No explicit background – uses default theme (transparent over the bar)
+        self.progress_label = ttk.Label(
+            prog_container, text="0%",
+            font=("TkDefaultFont", 9, "bold")
+        )
+        # Place the label centered inside the container
+        self.progress_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # Status line, no right padding, reduced vertical spacing
         status_frame = ttk.Frame(self)
@@ -673,7 +709,7 @@ class App(tk.Tk):
         self._ui_set_running(True)
         self.status_var.set("Preparing...")
         self.progress["value"] = 0
-        self.percent_var.set("0%")
+        self.progress_label.config(text="0%")
         self.progress_pct_var.set("0%")
 
         method = self._current_method()
@@ -682,13 +718,12 @@ class App(tk.Tk):
         def run():
             try:
                 files_done, dirs_done = shredder.shred_trash(method)
-                self._on_progress(1.0, f"Done: {files_done} files, {dirs_done} dirs")
+                # The final status already contains the done message
             except Cancelled:
                 self._on_progress(shredder.progress_ratio(), "Cancelled by user")
             except Exception as e:
                 self._on_progress(shredder.progress_ratio(), f"Error: {e}")
             finally:
-                # UI updates already live via timer, but ensure one final refresh
                 self.after(0, self._update_trash_info_and_list)
                 self.after(0, lambda: self._ui_set_running(False))
 
@@ -700,11 +735,11 @@ class App(tk.Tk):
         self.cancel_flag.set()
 
     def _on_progress(self, ratio: float, status: str) -> None:
-        """Thread-safe progress update."""
+        """Thread-safe progress update: update progress bar, labels, and status."""
         pct = int(max(0, min(100, round(ratio * 100))))
         def update():
             self.progress["value"] = pct
-            self.percent_var.set(f"{pct}%")
+            self.progress_label.config(text=f"{pct}%")
             self.progress_pct_var.set(f"{pct}%")
             self.status_var.set(status)
         self.after(0, update)
