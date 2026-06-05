@@ -8,10 +8,11 @@ Features:
 - Single authentication via pkexec helper (JSON line RPC).
 - Overwrite methods selectable with security/time hints; default set via constant.
 - Fully resizable window; startup size, list rows, and live refresh interval are configurable.
-- Shows Trash path and live first-level listing that updates during runs.
+- Shows Trash path and live tree view that updates during runs.
 - Status and progress bars stretch to full width without right padding.
 - Robust cleanup handles regular files, symlinks, and nested directories.
 - Progress percentage displayed inside the progress bar, plus real‑time ETA.
+- Tree view is always fully expanded.
 """
 
 import os
@@ -40,8 +41,8 @@ DEFAULT_METHOD_KEY: str = "dod_3pass"
 DEFAULT_WINDOW_WIDTH: int = 540
 DEFAULT_WINDOW_HEIGHT: int = 460
 
-# Number of visible rows in the Trash listbox at startup.
-LISTBOX_VISIBLE_ROWS: int = 10
+# Number of visible rows in the Trash tree at startup (approximate).
+TREE_VISIBLE_ROWS: int = 12
 
 # Live refresh interval for the Trash listing (milliseconds).
 LIVE_REFRESH_MS: int = 500
@@ -553,7 +554,7 @@ class Shredder:
 # --------------------------------- GUI -------------------------------------- #
 
 class App(tk.Tk):
-    """Tkinter GUI for the shredder with single-auth helper and live listing."""
+    """Tkinter GUI for the shredder with single-auth helper and live tree view."""
     def __init__(self):
         super().__init__()
         self.title("Secure Trash Shredder")
@@ -566,19 +567,19 @@ class App(tk.Tk):
 
         self.selected_label = tk.StringVar(value=default_label)
         self.status_var = tk.StringVar(value="Idle")
-        self.progress_pct_var = tk.StringVar(value="0%")   # shown next to buttons
+        self.progress_pct_var = tk.StringVar(value="0%")
         self.cancel_flag = threading.Event()
         self.worker: Optional[threading.Thread] = None
-        self._live_timer: Optional[str] = None  # after() id for live refresh
+        self._live_timer: Optional[str] = None
 
         self._build_widgets(default_label)
-        self._update_trash_info_and_list()
+        self._update_trash_tree()
 
         # Start live refresh loop
         self._schedule_live_refresh()
 
     def _build_widgets(self, default_label: str) -> None:
-        """Create and layout all widgets, with percentage label inside progress bar."""
+        """Create and layout all widgets, with treeview for Trash contents."""
         padding = {"padx": 10, "pady": 6}
 
         # Top row: method combobox
@@ -602,7 +603,7 @@ class App(tk.Tk):
         self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self.stop, state="disabled")
         self.stop_btn.pack(side="left", padx=(8, 0))
         
-        # Progress percentage display next to buttons (optional, but kept for clarity)
+        # Progress percentage display next to buttons
         self.progress_pct_var = tk.StringVar(value="0%")
         pct_display = ttk.Label(btn_frame, textvariable=self.progress_pct_var, font=("TkDefaultFont", 10, "bold"))
         pct_display.pack(side="left", padx=(16, 0))
@@ -610,42 +611,46 @@ class App(tk.Tk):
         # Progress bar container with centered percentage label
         prog_container = ttk.Frame(self, height=24)
         prog_container.pack(fill="x", padx=(10, 0), pady=4)
-        prog_container.pack_propagate(False)  # keep fixed height
+        prog_container.pack_propagate(False)
         self.progress = ttk.Progressbar(prog_container, orient="horizontal", mode="determinate")
         self.progress.pack(fill="both", expand=True)
-        # Create a label that sits right on top of the progress bar
-        # No explicit background – uses default theme (transparent over the bar)
         self.progress_label = ttk.Label(
             prog_container, text="0%",
             font=("TkDefaultFont", 9, "bold")
         )
-        # Place the label centered inside the container
         self.progress_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Status line, no right padding, reduced vertical spacing
+        # Status line
         status_frame = ttk.Frame(self)
         status_frame.pack(fill="x", padx=(10, 0), pady=(0, 4))
         status_label = ttk.Label(status_frame, textvariable=self.status_var, anchor="w")
         status_label.pack(fill="x", expand=True)
 
-        # Trash path + note, no right padding, tight spacing
+        # Trash path + note
         path_frame = ttk.Frame(self)
         path_frame.pack(fill="x", padx=(10, 0), pady=(0, 4))
         self.trash_path_var = tk.StringVar(value="")
         path_label = ttk.Label(path_frame, textvariable=self.trash_path_var, anchor="w")
         path_label.pack(fill="x", expand=True)
 
-        # First-level listing, small top gap, expand to fill remaining space
-        list_frame = ttk.Frame(self)
-        list_frame.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 10))
-        list_frame.rowconfigure(0, weight=1)
-        list_frame.columnconfigure(0, weight=1)
+        # Treeview for Trash contents (replaces listbox)
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 10))
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
 
-        self.listbox = tk.Listbox(list_frame, selectmode="browse", height=LISTBOX_VISIBLE_ROWS)
-        self.listbox.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox.yview)
+        self.tree = ttk.Treeview(tree_frame, selectmode="browse", height=TREE_VISIBLE_ROWS)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
-        self.listbox.config(yscrollcommand=scrollbar.set)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+
+        # Configure tree columns
+        self.tree["columns"] = ("type",)
+        self.tree.column("#0", width=400, minwidth=200, anchor="w")
+        self.tree.column("type", width=80, minwidth=60, anchor="center")
+        self.tree.heading("#0", text="Name", anchor="w")
+        self.tree.heading("type", text="Type", anchor="center")
 
     def _current_method(self) -> OverwriteMethod:
         """Return the OverwriteMethod selected in the combobox."""
@@ -659,7 +664,7 @@ class App(tk.Tk):
         self.method_combo.config(state="disabled" if running else "readonly")
 
     def _schedule_live_refresh(self) -> None:
-        """Schedule periodic refresh of Trash listing."""
+        """Schedule periodic refresh of Trash tree."""
         if self._live_timer is not None:
             try:
                 self.after_cancel(self._live_timer)
@@ -668,34 +673,69 @@ class App(tk.Tk):
         self._live_timer = self.after(LIVE_REFRESH_MS, self._live_refresh_tick)
 
     def _live_refresh_tick(self) -> None:
-        """Timer tick that updates the Trash listing and reschedules itself."""
+        """Timer tick that updates the Trash tree and reschedules itself."""
         try:
-            self._update_trash_info_and_list()
+            self._update_trash_tree()
         finally:
             # Keep refreshing regardless of running state
             self._schedule_live_refresh()
 
-    def _update_trash_info_and_list(self) -> None:
-        """Refresh the Trash path label and the first-level listing."""
+    def _expand_all(self, item: str = "") -> None:
+        """Recursively expand all tree items."""
+        children = self.tree.get_children(item)
+        for child in children:
+            self.tree.item(child, open=True)
+            self._expand_all(child)
+
+    def _update_trash_tree(self) -> None:
+        """Refresh the Trash path label and recursively populate the tree, then expand all."""
         trash = user_trash_root()
         note = f"Target: {trash}  (This is your Trash/Papierkorb per XDG specification)"
         self.trash_path_var.set(note)
 
-        self.listbox.delete(0, "end")
-        if trash.exists():
-            try:
-                entries = list(trash.iterdir())
-                entries.sort(key=lambda p: (not p.is_dir(), p.name.lower()))
-                if not entries:
-                    self.listbox.insert("end", "(Trash is empty)")
+        # Clear existing tree
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        if not trash.exists():
+            self.tree.insert("", "end", text="(Trash directory does not exist yet)", values=("",))
+            return
+
+        try:
+            # Recursively populate tree
+            self._populate_tree(trash, "")
+            # Expand all nodes after population
+            self._expand_all()
+        except Exception as e:
+            self.tree.insert("", "end", text=f"(Error reading Trash: {e})", values=("",))
+
+    def _populate_tree(self, path: Path, parent_iid: str) -> None:
+        """Recursively add entries to the treeview."""
+        try:
+            entries = list(path.iterdir())
+            # Sort: directories first, then files, alphabetically
+            entries.sort(key=lambda p: (not p.is_dir(), p.name.lower()))
+            for entry in entries:
+                # Determine type string
+                if entry.is_dir():
+                    type_str = "Directory"
+                elif entry.is_symlink():
+                    type_str = "Symlink"
                 else:
-                    for p in entries:
-                        prefix = "[DIR] " if p.is_dir() else "      "
-                        self.listbox.insert("end", f"{prefix}{p.name}")
-            except Exception as e:
-                self.listbox.insert("end", f"(Error reading Trash: {e})")
-        else:
-            self.listbox.insert("end", "(Trash directory does not exist yet)")
+                    type_str = "File"
+                
+                # Insert into tree
+                iid = str(entry.absolute())
+                self.tree.insert(parent_iid, "end", iid=iid, text=entry.name, values=(type_str,))
+                
+                # If directory, recursively add children
+                if entry.is_dir() and not entry.is_symlink():
+                    self._populate_tree(entry, iid)
+        except PermissionError:
+            # Insert placeholder for unreadable directory
+            self.tree.insert(parent_iid, "end", text="[Permission denied]", values=("",))
+        except Exception:
+            pass
 
     def start(self) -> None:
         """Start shredding in a worker thread."""
@@ -714,13 +754,12 @@ class App(tk.Tk):
         def run():
             try:
                 files_done, dirs_done = shredder.shred_trash(method)
-                # The final status already contains the done message
             except Cancelled:
                 self._on_progress(shredder.progress_ratio(), "Cancelled by user")
             except Exception as e:
                 self._on_progress(shredder.progress_ratio(), f"Error: {e}")
             finally:
-                self.after(0, self._update_trash_info_and_list)
+                self.after(0, self._update_trash_tree)
                 self.after(0, lambda: self._ui_set_running(False))
 
         self.worker = threading.Thread(target=run, daemon=True)
