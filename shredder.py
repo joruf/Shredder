@@ -23,6 +23,7 @@ import string
 import threading
 import subprocess
 import time
+import shutil
 from pathlib import Path
 from typing import Callable, List, Tuple, Optional, Any, Dict
 
@@ -358,7 +359,8 @@ class Shredder:
                     if self.is_cancelled():
                         raise Cancelled()
                     base_status = f"Overwriting {path.name} pass {idx}/{len(method.passes)}"
-                    self._update_progress(self.progress_ratio(), base_status)
+                    # Scale progress to 80% (files part)
+                    self._update_progress(self.progress_ratio() * 0.8, base_status)
                     f.seek(0)
                     remaining = size
                     while remaining > 0:
@@ -374,7 +376,8 @@ class Shredder:
                         written = f.write(buf) or 0
                         remaining -= written
                         self.processed_bytes += written
-                        self._update_progress(self.progress_ratio(), base_status)
+                        # Scale progress to 80% (files part)
+                        self._update_progress(self.progress_ratio() * 0.8, base_status)
                     f.flush()
                     os.fsync(f.fileno())
                 f.truncate(size)
@@ -415,7 +418,7 @@ class Shredder:
             pass
 
     def remove_empty_dir(self, dirpath: Path) -> None:
-        """Remove a single empty directory, with permission fixes."""
+        """Remove a single directory, force-deleting its contents if necessary."""
         if not dirpath.exists():
             return
             
@@ -433,18 +436,9 @@ class Shredder:
             dirpath.rmdir()
             fsync_dir(dirpath.parent)
         except OSError:
-            # Directory not empty or other error - try harder
+            # Directory not empty or other error - force removal
             try:
-                # Remove any remaining files
-                for item in dirpath.iterdir():
-                    if item.is_file() or item.is_symlink():
-                        try:
-                            ensure_writable(item)
-                            item.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                # Try again
-                dirpath.rmdir()
+                shutil.rmtree(dirpath, ignore_errors=True)
                 fsync_dir(dirpath.parent)
             except Exception:
                 pass
@@ -479,7 +473,7 @@ class Shredder:
                 raise Cancelled()
             self.overwrite_file(f, method)
             files_done += 1
-            pct = int(self.progress_ratio() * 80)
+            # Overall progress is (file progress * 0.8)
             self._update_progress(self.progress_ratio() * 0.8,
                                   f"Processed files {files_done}/{len(all_files)}")
 
@@ -493,7 +487,6 @@ class Shredder:
                 raise Cancelled()
             dir_ratio = (idx / len(all_dirs)) * dir_progress_range if all_dirs else 0
             total_progress = 0.8 + dir_ratio
-            pct = int(total_progress * 100)
             self._update_progress(total_progress, f"Removing directory {d.name}")
             self.remove_empty_dir(d)
             dirs_done += 1
@@ -522,6 +515,9 @@ class Shredder:
                         leftovers.append(dp / f)
                     for d in dirnames:
                         leftovers.append(dp / d)
+                
+                # Sort by depth descending to delete deepest first
+                leftovers.sort(key=lambda p: len(p.parts), reverse=True)
                 
                 for idx, p in enumerate(leftovers):
                     if self.is_cancelled():
