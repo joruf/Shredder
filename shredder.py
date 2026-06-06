@@ -12,7 +12,7 @@ Features:
 - Status and progress bars stretch to full width without right padding.
 - Robust cleanup handles regular files, symlinks, and nested directories.
 - Progress percentage displayed inside the progress bar, plus real‑time ETA.
-- Tree view is always fully expanded.
+- Tree view.
 """
 
 import os
