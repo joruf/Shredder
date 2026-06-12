@@ -21,7 +21,7 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
 ## Usage
 
 ```bash
-cd Shredder
-git clone https://github.com/joruf/Shredder.git
+git clone https://github.com/joruf/shredder.git
+cd shredder
 chmod +x shredder.py
 ./shredder.py
