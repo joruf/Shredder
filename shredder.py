@@ -31,6 +31,9 @@ from typing import Callable, List, Tuple, Optional, Any, Dict
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from desktop_setup import maybe_prompt_desktop_setup
+from nemo_setup import maybe_prompt_nemo_setup
+
 # ----------------------------- Configuration -------------------------------- #
 
 # Default overwrite method key for initial selection.
@@ -806,6 +809,8 @@ def main() -> None:
         # Hidden root to allow messageboxes before main window
         _root = tk.Tk()
         _root.withdraw()
+        maybe_prompt_nemo_setup(_root)
+        maybe_prompt_desktop_setup(_root)
         run_gui_with_single_auth()
 
 
