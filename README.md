@@ -11,12 +11,14 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
 - **Real‑time progress** – percentage inside the progress bar + detailed status messages.
 - **Cancel button** – safely stop the process at any time.
 - **Fully resizable window** – adapts to your screen.
-- **No external dependencies** – uses only Python standard library + tkinter.
+- **Dependency check on startup** – offers to install missing system packages (`python3-tk`, `policykit-1`).
 
 ## Requirements
 
-- Linux with `pkexec` (part of `policykit-1`)
-- Python 3.6+ (tkinter is usually pre‑installed)
+- Linux with `pkexec` (package `policykit-1` on Debian/Ubuntu/Mint)
+- Python 3.6+ with tkinter (package `python3-tk` on Debian/Ubuntu/Mint)
+
+On first start, missing packages are detected automatically and can be installed via `pkexec`/`sudo`.
 
 ## Usage
 

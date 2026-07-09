@@ -28,6 +28,12 @@ import shutil
 from pathlib import Path
 from typing import Callable, List, Tuple, Optional, Any, Dict
 
+if "--helper" not in sys.argv:
+    from dependencies_setup import ensure_dependencies
+
+    if not ensure_dependencies():
+        sys.exit(1)
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 
