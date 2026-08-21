@@ -17,9 +17,8 @@ from tkinter import messagebox
 from nemo_setup import INIT_FILE, mark_initialization_done
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DESKTOP_TEMPLATE = SCRIPT_DIR / "Papierkorb shredder.desktop"
-DESKTOP_FILENAME = "Papierkorb shredder.desktop"
-SHREDDER_SCRIPT = SCRIPT_DIR / "shredder.py"
+DESKTOP_TEMPLATE = SCRIPT_DIR / "Shredder.desktop"
+DESKTOP_FILENAME = "Shredder.desktop"
 
 
 def user_desktop_dir() -> Path:
@@ -52,49 +51,34 @@ def user_desktop_dir() -> Path:
     return Path.home() / "Desktop"
 
 
-def build_desktop_entry_content() -> str:
-    """
-    Build the .desktop file contents from the template with the correct Exec path.
-
-    @return str Desktop entry definition
-    """
-    exec_line = f"Exec=python3 {SHREDDER_SCRIPT}\n"
-    if not DESKTOP_TEMPLATE.is_file():
-        return (
-            "[Desktop Entry]\n"
-            "Version=1.0\n"
-            "Type=Application\n"
-            "Name=Secure Trash Shredder\n"
-            "Comment=Securely delete all files in the trash\n"
-            "Icon=user-trash-full\n"
-            f"{exec_line.rstrip()}\n"
-            "Terminal=false\n"
-            "Categories=Utility;Security;System;\n"
-            "StartupNotify=true\n"
-        )
-
-    lines: list[str] = []
-    for line in DESKTOP_TEMPLATE.read_text(encoding="utf-8").splitlines():
-        if line.startswith("Exec="):
-            lines.append(exec_line.rstrip())
-        else:
-            lines.append(line)
-    return "\n".join(lines) + "\n"
-
-
 def install_desktop_shortcut() -> tuple[bool, Path | None]:
     """
     Install the desktop shortcut on the user's desktop.
 
+    The project ``.desktop`` file locates ``shredder.py`` via ``%k``. A symlink on the
+    desktop keeps that true: ``readlink -f`` still resolves to the file beside the script.
+
     @return tuple[bool, Path | None] Success flag and created shortcut path
     """
     try:
+        if not DESKTOP_TEMPLATE.is_file():
+            return False, None
+        dest_dir = Path.home() / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps"
+        src = SCRIPT_DIR / "shredder.svg"
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            if src.is_file():
+                (dest_dir / "shredder.svg").write_bytes(src.read_bytes())
+        except OSError:
+            pass
         desktop_dir = user_desktop_dir()
         desktop_dir.mkdir(parents=True, exist_ok=True)
         shortcut_path = desktop_dir / DESKTOP_FILENAME
-        shortcut_path.write_text(build_desktop_entry_content(), encoding="utf-8")
-        shortcut_path.chmod(
-            shortcut_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        if shortcut_path.is_symlink() or shortcut_path.exists():
+            shortcut_path.unlink()
+        shortcut_path.symlink_to(DESKTOP_TEMPLATE.resolve())
+        DESKTOP_TEMPLATE.chmod(
+            DESKTOP_TEMPLATE.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
         return True, shortcut_path
     except OSError:

@@ -26,9 +26,14 @@ class TestProjectLayout(unittest.TestCase):
     def test_main_script_exists(self) -> None:
         self.assertTrue((ROOT / "shredder.py").is_file())
 
-    def test_desktop_helpers_exist(self) -> None:
-        self.assertTrue((ROOT / "desktop_setup.py").is_file())
-        self.assertTrue((ROOT / "nemo_setup.py").is_file())
+    def test_desktop_launcher_exists(self) -> None:
+        launcher = ROOT / "Shredder.desktop"
+        self.assertTrue(launcher.is_file())
+        text = launcher.read_text(encoding="utf-8")
+        self.assertIn("%k", text)
+        self.assertIn("./shredder.py", text)
+        self.assertIn("Icon=shredder", text)
+        self.assertTrue((ROOT / "shredder.svg").is_file())
 
     def test_linux_only_documented_in_readme(self) -> None:
         text = (ROOT / "README.md").read_text(encoding="utf-8")

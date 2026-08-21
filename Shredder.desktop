@@ -3,8 +3,9 @@ Version=1.0
 Type=Application
 Name=Secure Trash Shredder
 Comment=Securely delete all files in the trash
-Icon=user-trash-full
-Exec=/home/joruf/Dokumente/GitHub/Shredder/shredder.py
+# %k is this .desktop file, so ./shredder.py is always the one in the same folder.
+Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0)) && exec python3 ./shredder.py" %k
+Icon=shredder
 Terminal=false
 Categories=Utility;Security;System;
 StartupNotify=true
